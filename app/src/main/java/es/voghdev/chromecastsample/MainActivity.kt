@@ -1,11 +1,18 @@
 package es.voghdev.chromecastsample
 
+import android.Manifest
+import android.annotation.SuppressLint
+import android.content.Context
+import android.content.pm.PackageManager
 import android.media.AudioManager
+import android.os.Build
 import android.os.Bundle
+import android.view.MotionEvent
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.view.ContextThemeWrapper
-import androidx.fragment.app.FragmentActivity
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
@@ -24,6 +31,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.content.ContextCompat
+import androidx.fragment.app.FragmentActivity
 import androidx.mediarouter.app.MediaRouteButton
 import com.google.android.gms.cast.MediaInfo
 import com.google.android.gms.cast.MediaMetadata
@@ -191,15 +200,45 @@ private fun CastSampleScreen(
     }
 }
 
+@SuppressLint("ClickableViewAccessibility")
 @Composable
 private fun CastButton(modifier: Modifier = Modifier) {
+    var buttonRef by remember { mutableStateOf<MediaRouteButton?>(null) }
+
+    val permissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission(),
+    ) {
+        // Open the chooser regardless of grant/deny — Cast can still discover on
+        // most networks without NEARBY_WIFI_DEVICES; the permission just improves
+        // discovery reliability on API 33+.
+        buttonRef?.performClick()
+    }
+
     AndroidView(
         modifier = modifier,
         factory = { context ->
             val themed = ContextThemeWrapper(context, androidx.appcompat.R.style.Theme_AppCompat)
             MediaRouteButton(themed).also { button ->
                 CastButtonFactory.setUpMediaRouteButton(context.applicationContext, button)
+                buttonRef = button
+                button.setOnTouchListener { view, event ->
+                    if (event.action == MotionEvent.ACTION_UP) {
+                        if (needsNearbyWifiDevicesPermission(view.context)) {
+                            permissionLauncher.launch(Manifest.permission.NEARBY_WIFI_DEVICES)
+                        } else {
+                            button.performClick()
+                        }
+                    }
+                    true
+                }
             }
         },
     )
 }
+
+private fun needsNearbyWifiDevicesPermission(context: Context): Boolean =
+    Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+        ContextCompat.checkSelfPermission(
+            context,
+            Manifest.permission.NEARBY_WIFI_DEVICES,
+        ) != PackageManager.PERMISSION_GRANTED
