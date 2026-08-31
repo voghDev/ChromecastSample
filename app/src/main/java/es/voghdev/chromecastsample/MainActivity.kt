@@ -69,7 +69,7 @@ private const val TAG = "ChromecastSample"
 private const val MAX_EVENTS = 200
 
 private const val SAMPLE_VIDEO_URL =
-    "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4"
+    "https://storage.googleapis.com/exoplayer-test-media-0/BigBuckBunny_320x180.mp4"
 private const val SAMPLE_VIDEO_TITLE = "Big Buck Bunny"
 
 data class CastEvent(val timestamp: Long, val message: String)
