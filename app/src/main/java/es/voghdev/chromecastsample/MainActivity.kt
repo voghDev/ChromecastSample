@@ -2,10 +2,10 @@ package es.voghdev.chromecastsample
 
 import android.media.AudioManager
 import android.os.Bundle
-import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.appcompat.view.ContextThemeWrapper
+import androidx.fragment.app.FragmentActivity
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
@@ -41,7 +41,7 @@ private const val SAMPLE_VIDEO_URL =
     "https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4"
 private const val SAMPLE_VIDEO_TITLE = "Big Buck Bunny"
 
-class MainActivity : ComponentActivity() {
+class MainActivity : FragmentActivity() {
 
     private var castContext: CastContext? = null
     private var sessionManager: SessionManager? = null
