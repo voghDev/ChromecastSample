@@ -64,7 +64,6 @@ import es.voghdev.chromecastsample.ui.theme.ChromecastSampleTheme
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
-import java.util.concurrent.Executors
 
 private const val TAG = "ChromecastSample"
 private const val MAX_EVENTS = 200
@@ -194,22 +193,14 @@ class MainActivity : FragmentActivity() {
 
         log("Activity onCreate")
 
-        CastContext.getSharedInstance(this, Executors.newSingleThreadExecutor())
-            .addOnSuccessListener { context ->
-                log("CastContext initialized")
-                castContext = context
-                sessionManager = context.sessionManager
-                val current = sessionManager?.currentCastSession
-                castSession = current
-                if (current?.isConnected == true) {
-                    log("CastContext: already connected to ${current.castDevice?.friendlyName ?: "?"}")
-                    registerMediaCallback(current)
-                    connectionState = CastConnectionState.CONNECTED
-                }
-            }
-            .addOnFailureListener { e ->
-                log("CastContext INIT FAILED: ${e.javaClass.simpleName}: ${e.message}")
-            }
+        try {
+            val context = CastContext.getSharedInstance(this)
+            castContext = context
+            sessionManager = context.sessionManager
+            log("CastContext initialized")
+        } catch (e: Exception) {
+            log("CastContext INIT FAILED: ${e.javaClass.simpleName}: ${e.message}")
+        }
 
         setContent {
             ChromecastSampleTheme {
