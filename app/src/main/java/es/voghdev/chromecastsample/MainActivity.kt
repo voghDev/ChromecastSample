@@ -487,15 +487,25 @@ private fun PlaybackControls(
     onRewind: () -> Unit,
     onForward: () -> Unit,
 ) {
-    Row(
+    Column(
         modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(6.dp, Alignment.CenterHorizontally),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        AnimatedOutlinedButton(onClick = onRewind, enabled = enabled) { Text("-10s") }
-        AnimatedOutlinedButton(onClick = onPlay, enabled = enabled) { Text("Play") }
-        AnimatedOutlinedButton(onClick = onPause, enabled = enabled) { Text("Pause") }
-        AnimatedOutlinedButton(onClick = onStop, enabled = enabled) { Text("Stop") }
-        AnimatedOutlinedButton(onClick = onForward, enabled = enabled) { Text("+10s") }
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally),
+        ) {
+            AnimatedOutlinedButton(onClick = onPlay, enabled = enabled) { Text("Play") }
+            AnimatedOutlinedButton(onClick = onPause, enabled = enabled) { Text("Pause") }
+            AnimatedOutlinedButton(onClick = onStop, enabled = enabled) { Text("Stop") }
+        }
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally),
+        ) {
+            AnimatedOutlinedButton(onClick = onRewind, enabled = enabled) { Text("-10s") }
+            AnimatedOutlinedButton(onClick = onForward, enabled = enabled) { Text("+10s") }
+        }
     }
 }
 
