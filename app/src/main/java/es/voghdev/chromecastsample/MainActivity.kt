@@ -5,6 +5,7 @@ import android.annotation.SuppressLint
 import android.content.Context
 import android.content.pm.PackageManager
 import android.media.AudioManager
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.util.Log
@@ -14,11 +15,18 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.view.ContextThemeWrapper
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.background
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -28,10 +36,12 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -42,6 +52,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshots.SnapshotStateList
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -53,6 +64,7 @@ import com.google.android.gms.cast.MediaError
 import com.google.android.gms.cast.MediaInfo
 import com.google.android.gms.cast.MediaLoadRequestData
 import com.google.android.gms.cast.MediaMetadata
+import com.google.android.gms.cast.MediaSeekOptions
 import com.google.android.gms.cast.MediaStatus
 import com.google.android.gms.cast.framework.CastButtonFactory
 import com.google.android.gms.cast.framework.CastContext
@@ -67,6 +79,7 @@ import java.util.Locale
 
 private const val TAG = "ChromecastSample"
 private const val MAX_EVENTS = 200
+private const val SEEK_DELTA_MS = 10_000L
 
 private const val SAMPLE_VIDEO_URL =
     "https://storage.googleapis.com/exoplayer-test-media-0/BigBuckBunny_320x180.mp4"
@@ -81,6 +94,7 @@ class MainActivity : FragmentActivity() {
     private var castSession: CastSession? = null
 
     private var connectionState by mutableStateOf(CastConnectionState.DISCONNECTED)
+    private var playerState by mutableStateOf(MediaStatus.PLAYER_STATE_UNKNOWN)
     private val events: SnapshotStateList<CastEvent> = mutableStateListOf()
 
     private fun log(message: String) {
@@ -92,6 +106,7 @@ class MainActivity : FragmentActivity() {
     private val remoteMediaClientCallback = object : RemoteMediaClient.Callback() {
         override fun onStatusUpdated() {
             val status = castSession?.remoteMediaClient?.mediaStatus
+            playerState = status?.playerState ?: MediaStatus.PLAYER_STATE_UNKNOWN
             if (status == null) {
                 log("MEDIA onStatusUpdated: mediaStatus=null")
                 return
@@ -148,6 +163,7 @@ class MainActivity : FragmentActivity() {
             log("SESSION start FAILED: ${castStatusName(error)} ($error)")
             castSession = null
             connectionState = CastConnectionState.DISCONNECTED
+            playerState = MediaStatus.PLAYER_STATE_UNKNOWN
         }
 
         override fun onSessionResuming(session: CastSession, sessionId: String) {
@@ -166,6 +182,7 @@ class MainActivity : FragmentActivity() {
             log("SESSION resume FAILED: ${castStatusName(error)} ($error)")
             castSession = null
             connectionState = CastConnectionState.DISCONNECTED
+            playerState = MediaStatus.PLAYER_STATE_UNKNOWN
         }
 
         override fun onSessionEnding(session: CastSession) {
@@ -177,12 +194,14 @@ class MainActivity : FragmentActivity() {
             unregisterMediaCallback(session)
             castSession = null
             connectionState = CastConnectionState.DISCONNECTED
+            playerState = MediaStatus.PLAYER_STATE_UNKNOWN
         }
 
         override fun onSessionSuspended(session: CastSession, reason: Int) {
             log("SESSION suspended: reason=$reason")
             unregisterMediaCallback(session)
             connectionState = CastConnectionState.DISCONNECTED
+            playerState = MediaStatus.PLAYER_STATE_UNKNOWN
         }
     }
 
@@ -206,9 +225,16 @@ class MainActivity : FragmentActivity() {
             ChromecastSampleTheme {
                 CastSampleScreen(
                     connectionState = connectionState,
+                    playerState = playerState,
                     events = events,
-                    onCastSampleClick = ::loadSampleMedia,
+                    onStartCast = ::loadSampleMedia,
+                    onPlay = ::playMedia,
+                    onPause = ::pauseMedia,
+                    onStop = ::stopMedia,
+                    onRewind = { seekBy(-SEEK_DELTA_MS) },
+                    onForward = { seekBy(+SEEK_DELTA_MS) },
                     onClearLog = { events.clear() },
+                    onSaveLog = ::saveLogTo,
                 )
             }
         }
@@ -219,11 +245,14 @@ class MainActivity : FragmentActivity() {
         sessionManager?.addSessionManagerListener(sessionListener, CastSession::class.java)
         val current = sessionManager?.currentCastSession
         castSession = current
-        connectionState = if (current?.isConnected == true) {
+        if (current?.isConnected == true) {
             registerMediaCallback(current)
-            CastConnectionState.CONNECTED
+            connectionState = CastConnectionState.CONNECTED
+            playerState = current.remoteMediaClient?.mediaStatus?.playerState
+                ?: MediaStatus.PLAYER_STATE_UNKNOWN
         } else {
-            CastConnectionState.DISCONNECTED
+            connectionState = CastConnectionState.DISCONNECTED
+            playerState = MediaStatus.PLAYER_STATE_UNKNOWN
         }
     }
 
@@ -247,16 +276,7 @@ class MainActivity : FragmentActivity() {
     }
 
     private fun loadSampleMedia() {
-        val session = castSession
-        if (session == null) {
-            log("Load aborted: castSession=null")
-            return
-        }
-        val remoteMediaClient = session.remoteMediaClient
-        if (remoteMediaClient == null) {
-            log("Load aborted: remoteMediaClient=null")
-            return
-        }
+        val remoteMediaClient = requireClient("Load") ?: return
 
         log("Requesting load: $SAMPLE_VIDEO_URL")
 
@@ -275,16 +295,81 @@ class MainActivity : FragmentActivity() {
                 .setAutoplay(true)
                 .build(),
         )
-        request.setResultCallback { result ->
-            val status = result.status
-            if (status.isSuccess) {
-                log("Load OK")
-            } else {
-                log(
-                    "Load FAILED: ${castStatusName(status.statusCode)} (${status.statusCode})" +
-                        " msg=${status.statusMessage ?: "<none>"}",
-                )
+        request.setResultCallback { logMediaResult("Load", it) }
+    }
+
+    private fun playMedia() {
+        val client = requireClient("Play") ?: return
+        log("Play requested")
+        client.play().setResultCallback { logMediaResult("Play", it) }
+    }
+
+    private fun pauseMedia() {
+        val client = requireClient("Pause") ?: return
+        log("Pause requested")
+        client.pause().setResultCallback { logMediaResult("Pause", it) }
+    }
+
+    private fun stopMedia() {
+        val client = requireClient("Stop") ?: return
+        log("Stop requested")
+        client.stop().setResultCallback { logMediaResult("Stop", it) }
+    }
+
+    private fun seekBy(deltaMs: Long) {
+        val client = requireClient("Seek") ?: return
+        val current = client.approximateStreamPosition
+        val target = (current + deltaMs).coerceAtLeast(0L)
+        log("Seek requested: from=${current}ms delta=${deltaMs}ms → target=${target}ms")
+        val options = MediaSeekOptions.Builder().setPosition(target).build()
+        client.seek(options).setResultCallback { logMediaResult("Seek", it) }
+    }
+
+    private fun requireClient(op: String): RemoteMediaClient? {
+        val session = castSession
+        if (session == null) {
+            log("$op aborted: castSession=null")
+            return null
+        }
+        val client = session.remoteMediaClient
+        if (client == null) {
+            log("$op aborted: remoteMediaClient=null")
+            return null
+        }
+        return client
+    }
+
+    private fun logMediaResult(op: String, result: RemoteMediaClient.MediaChannelResult) {
+        val status = result.status
+        if (status.isSuccess) {
+            log("$op OK")
+        } else {
+            log(
+                "$op FAILED: ${castStatusName(status.statusCode)} (${status.statusCode})" +
+                    " msg=${status.statusMessage ?: "<none>"}",
+            )
+        }
+    }
+
+    private fun saveLogTo(uri: Uri) {
+        val formatter = SimpleDateFormat("HH:mm:ss.SSS", Locale.US)
+        val snapshot = events.toList().asReversed()
+        try {
+            contentResolver.openOutputStream(uri)?.use { out ->
+                out.bufferedWriter().use { writer ->
+                    snapshot.forEach { event ->
+                        writer.appendLine(
+                            "${formatter.format(Date(event.timestamp))}  ${event.message}",
+                        )
+                    }
+                }
+            } ?: run {
+                log("Log save FAILED: openOutputStream returned null for $uri")
+                return
             }
+            log("Log saved (${snapshot.size} entries) → $uri")
+        } catch (e: Exception) {
+            log("Log save FAILED: ${e.javaClass.simpleName}: ${e.message}")
         }
     }
 }
@@ -317,10 +402,21 @@ private fun idleReasonName(reason: Int): String = when (reason) {
 @Composable
 private fun CastSampleScreen(
     connectionState: CastConnectionState,
+    playerState: Int,
     events: List<CastEvent>,
-    onCastSampleClick: () -> Unit,
+    onStartCast: () -> Unit,
+    onPlay: () -> Unit,
+    onPause: () -> Unit,
+    onStop: () -> Unit,
+    onRewind: () -> Unit,
+    onForward: () -> Unit,
     onClearLog: () -> Unit,
+    onSaveLog: (Uri) -> Unit,
 ) {
+    var showLog by remember { mutableStateOf(false) }
+    val connected = connectionState == CastConnectionState.CONNECTED
+    val canControl = connected && playerState != MediaStatus.PLAYER_STATE_UNKNOWN
+
     Scaffold(
         modifier = Modifier.fillMaxSize(),
         topBar = {
@@ -335,18 +431,132 @@ private fun CastSampleScreen(
                 .fillMaxSize()
                 .padding(innerPadding)
                 .padding(horizontal = 24.dp, vertical = 16.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            Text("Status: ${connectionState.name.lowercase()}")
-            Button(
-                onClick = onCastSampleClick,
-                enabled = connectionState == CastConnectionState.CONNECTED,
+            Text(
+                text = buildString {
+                    append("Status: ${connectionState.name.lowercase()}")
+                    if (playerState != MediaStatus.PLAYER_STATE_UNKNOWN) {
+                        append(" · ")
+                        append(playerStateName(playerState).lowercase())
+                    }
+                },
+            )
+            AnimatedButton(
+                onClick = onStartCast,
+                enabled = connected,
+                modifier = Modifier.fillMaxWidth(),
             ) {
-                Text("Cast sample video")
+                Text("Start cast")
             }
+            PlaybackControls(
+                enabled = canControl,
+                onPlay = onPlay,
+                onPause = onPause,
+                onStop = onStop,
+                onRewind = onRewind,
+                onForward = onForward,
+            )
             HorizontalDivider()
-            Row(events.size, onClearLog)
+            AnimatedOutlinedButton(
+                onClick = { showLog = true },
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text("Log (${events.size})")
+            }
+        }
+    }
+
+    if (showLog) {
+        LogBottomSheet(
+            events = events,
+            onDismiss = { showLog = false },
+            onClear = onClearLog,
+            onSaveLog = onSaveLog,
+        )
+    }
+}
+
+@Composable
+private fun PlaybackControls(
+    enabled: Boolean,
+    onPlay: () -> Unit,
+    onPause: () -> Unit,
+    onStop: () -> Unit,
+    onRewind: () -> Unit,
+    onForward: () -> Unit,
+) {
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally),
+        ) {
+            AnimatedOutlinedButton(onClick = onPlay, enabled = enabled) { Text("Play") }
+            AnimatedOutlinedButton(onClick = onPause, enabled = enabled) { Text("Pause") }
+            AnimatedOutlinedButton(onClick = onStop, enabled = enabled) { Text("Stop") }
+        }
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally),
+        ) {
+            AnimatedOutlinedButton(onClick = onRewind, enabled = enabled) { Text("-10s") }
+            AnimatedOutlinedButton(onClick = onForward, enabled = enabled) { Text("+10s") }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun LogBottomSheet(
+    events: List<CastEvent>,
+    onDismiss: () -> Unit,
+    onClear: () -> Unit,
+    onSaveLog: (Uri) -> Unit,
+) {
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val defaultFileName = remember {
+        val ts = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date())
+        "chromecast-log-$ts.txt"
+    }
+    val saveLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("text/plain"),
+    ) { uri -> uri?.let(onSaveLog) }
+
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(horizontal = 16.dp)
+                .padding(bottom = 24.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    "Events (${events.size})",
+                    style = MaterialTheme.typography.titleSmall,
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    AnimatedOutlinedButton(
+                        onClick = { saveLauncher.launch(defaultFileName) },
+                        enabled = events.isNotEmpty(),
+                    ) { Text("Save to file") }
+                    AnimatedOutlinedButton(
+                        onClick = onClear,
+                        enabled = events.isNotEmpty(),
+                    ) { Text("Clear") }
+                }
+            }
+            Spacer(Modifier.height(12.dp))
             EventLog(
                 events = events,
                 modifier = Modifier
@@ -354,21 +564,6 @@ private fun CastSampleScreen(
                     .weight(1f),
             )
         }
-    }
-}
-
-@Composable
-private fun Row(eventCount: Int, onClearLog: () -> Unit) {
-    androidx.compose.foundation.layout.Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text(
-            "Events ($eventCount)",
-            style = MaterialTheme.typography.titleSmall,
-        )
-        OutlinedButton(onClick = onClearLog) { Text("Clear") }
     }
 }
 
@@ -399,6 +594,52 @@ private fun EventLog(events: List<CastEvent>, modifier: Modifier = Modifier) {
             )
         }
     }
+}
+
+private const val PRESSED_SCALE = 0.92f
+
+@Composable
+private fun AnimatedButton(
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    content: @Composable RowScope.() -> Unit,
+) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val pressed by interactionSource.collectIsPressedAsState()
+    val scale by animateFloatAsState(
+        targetValue = if (pressed) PRESSED_SCALE else 1f,
+        label = "buttonScale",
+    )
+    Button(
+        onClick = onClick,
+        modifier = modifier.scale(scale),
+        enabled = enabled,
+        interactionSource = interactionSource,
+        content = content,
+    )
+}
+
+@Composable
+private fun AnimatedOutlinedButton(
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    content: @Composable RowScope.() -> Unit,
+) {
+    val interactionSource = remember { MutableInteractionSource() }
+    val pressed by interactionSource.collectIsPressedAsState()
+    val scale by animateFloatAsState(
+        targetValue = if (pressed) PRESSED_SCALE else 1f,
+        label = "outlinedButtonScale",
+    )
+    OutlinedButton(
+        onClick = onClick,
+        modifier = modifier.scale(scale),
+        enabled = enabled,
+        interactionSource = interactionSource,
+        content = content,
+    )
 }
 
 @SuppressLint("ClickableViewAccessibility")
