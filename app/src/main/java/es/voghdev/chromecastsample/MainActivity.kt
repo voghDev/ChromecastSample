@@ -58,6 +58,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.fragment.app.FragmentActivity
+import androidx.lifecycle.lifecycleScope
 import androidx.mediarouter.app.MediaRouteButton
 import com.google.android.gms.cast.CastStatusCodes
 import com.google.android.gms.cast.MediaError
@@ -72,10 +73,14 @@ import com.google.android.gms.cast.framework.CastSession
 import com.google.android.gms.cast.framework.SessionManager
 import com.google.android.gms.cast.framework.SessionManagerListener
 import com.google.android.gms.cast.framework.media.RemoteMediaClient
+import es.voghdev.chromecastsample.persistence.AppDatabase
 import es.voghdev.chromecastsample.ui.theme.ChromecastSampleTheme
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 private const val TAG = "ChromecastSample"
 private const val MAX_EVENTS = 200
@@ -211,6 +216,17 @@ class MainActivity : FragmentActivity() {
         volumeControlStream = AudioManager.STREAM_MUSIC
 
         log("Activity onCreate")
+
+        lifecycleScope.launch {
+            try {
+                val db = AppDatabase.get(this@MainActivity)
+                val count = withContext(Dispatchers.IO) { db.coursesDao().count() }
+                val dbFile = getDatabasePath(AppDatabase.DB_NAME)
+                log("DB opened: ${dbFile.absolutePath} (courses=$count)")
+            } catch (e: Exception) {
+                log("DB open FAILED: ${e.javaClass.simpleName}: ${e.message}")
+            }
+        }
 
         try {
             val context = CastContext.getSharedInstance(this)
